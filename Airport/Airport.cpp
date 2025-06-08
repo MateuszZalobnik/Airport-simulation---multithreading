@@ -16,6 +16,9 @@ Airport::Airport(int numRunways, int numGates, int numTankers)
     thread airplaneThread(&Airport::airplaneGenerator, this);
     thread displayThread(&Airport::displayLoop, this);
     thread statusCheckerThread(&Airport::StatusChecker, this);
+    thread generatePassengerGroupsThread(&Airport::GeneratePassengerGroups, this);
+    thread seatPassengersThread(&Airport::SeatPassengersThread, this);
+
     for (Tanker* t : tankers) {
         threads.emplace_back(&Airport::runTanker, this, t);
     }
@@ -28,6 +31,8 @@ Airport::Airport(int numRunways, int numGates, int numTankers)
     airplaneThread.join();
     displayThread.join();
     statusCheckerThread.join();
+    generatePassengerGroupsThread.join();
+    seatPassengersThread.join();
     for (auto& t : threads) {
         t.join();
     }
@@ -129,7 +134,7 @@ void Airport::manageLanding(Runway* runway)
             this_thread::sleep_for(chrono::milliseconds(100));
     }
 
-
+    playSoundFile("D:\\school\\SO2_Lot\\landingv2.mp3");
     this_thread::sleep_for(chrono::seconds(runway->airplane->TimeToTakeOffAndLandingInSeconds));
 
     {
@@ -141,6 +146,7 @@ void Airport::manageLanding(Runway* runway)
     assignedGate->airplane = airplane;
     runway->isLanding = false;
     runway->airplane = nullptr;
+    airplane->landingTime = chrono::steady_clock::now();
 }
 
 void Airport::manageTakingOff(Runway* runway)
@@ -164,8 +170,15 @@ void Airport::manageTakingOff(Runway* runway)
 
     runway->isTakingOff = true;
     runway->airplane = airplane;
+    airplane->actualTakeOffTime = chrono::steady_clock::now();
+    auto serviceDuration = chrono::duration_cast<chrono::seconds>(airplane->readyToTakeOffTime - airplane->landingTime).count();
+    auto waitTime = chrono::duration_cast<chrono::seconds>(airplane->actualTakeOffTime - airplane->readyToTakeOffTime).count();
+    totalPlaneServiceTime += serviceDuration;
+    totalPlaneWaitTime += waitTime;
+    totalPlaneCount++;
 
     this_thread::sleep_for(chrono::seconds(runway->airplane->TimeToTakeOffAndLandingInSeconds));
+    playSoundFile("D:\\school\\SO2_Lot\\landingv2.mp3");
 
     Gate* airplaneGate;
     for (auto& gate : this->gates)
@@ -197,6 +210,26 @@ void Airport::displayLoop()
     }
 }
 
+void Airport::playSoundFile(const std::string& filename) {
+    sf::SoundBuffer* buffer = new sf::SoundBuffer();
+    if (!buffer->loadFromFile(filename)) {
+        delete buffer;
+        return;
+    }
+
+    sf::Sound* sound = new sf::Sound();
+    sound->setBuffer(*buffer);
+    sound->play();
+
+    // Czekamy, aż dźwięk się skończy, potem czyścimy
+    std::thread([sound, buffer]() {
+        while (sound->getStatus() == sf::Sound::Playing)
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        delete sound;
+        delete buffer;
+    }).detach();
+}
+
 void Airport::displayState()
 {
     {
@@ -210,15 +243,31 @@ void Airport::displayState()
         cout << "waiting: " << airplanesWaiting.size() << endl;
         cout << endl;
 
+        displayStatistics();
         displayRunways();
         displayTankers();
         displayGates();
+        displaySeats();
 
 
         cout << endl;
         cout << "========================================================================================";
         cout << endl;
         cout << endl;
+    }
+}
+
+void Airport::displayStatistics()
+{
+    if (totalPlaneCount > 0)
+    {
+        cout << endl;
+        cout << "Average service time for planes: "
+             << (totalPlaneServiceTime / totalPlaneCount) << "s" << endl;
+
+        cout << "Average wait time for planes: "
+                << (totalPlaneWaitTime / totalPlaneCount) << "s" << endl;
+
     }
 }
 
@@ -348,6 +397,27 @@ void Airport::displayGates()
         cout << "------------+";
     }
     cout << endl;
+
+    cout << "|";
+    for (int i = 0; i < gates.size(); ++i)
+    {
+        int allPassenegers = 0;
+        auto passengerGroup = gates[i]->passengerGroups;
+        for (int j = 0; j < passengerGroup.size(); ++j)
+        {
+            allPassenegers += passengerGroup[j];
+        }
+
+        cout << " " << setw(10) << allPassenegers << " |";
+    }
+    cout << "  <- all passenegers" << endl;
+
+    cout << "+";
+    for (int i = 0; i < gates.size(); ++i)
+    {
+        cout << "------------+";
+    }
+    cout << endl;
 }
 
 void Airport::displayTankers()
@@ -391,6 +461,63 @@ void Airport::displayTankers()
     cout << endl;
 }
 
+void Airport::displaySeats()
+{
+    cout << endl;
+    vector<Airplane*> planesToDisplay;
+
+    // Zbieramy samoloty z bramek
+    for (const auto& gate : gates) {
+        if (gate->airplane != nullptr) {
+            planesToDisplay.push_back(gate->airplane);
+        }
+    }
+
+    if (planesToDisplay.empty()) {
+        cout << "[INFO] Brak samolotów przypisanych do bramek.\n";
+        return;
+    }
+
+    int maxRows = 0;
+    for (auto* plane : planesToDisplay) {
+        maxRows = max(maxRows, plane->rows);
+    }
+    for (int i = 0; i < gates.size(); ++i)
+    {
+        string gateId = "Gate ID: " + to_string(i);
+        cout << left << setw (30) << gateId;
+    }
+    cout << "\n";
+
+    for (int row = 0; row < maxRows; ++row) {
+        for (auto& gate : gates) {
+            if (!gate->airplane) {
+                cout << left << setw(30) << " ";
+                continue;
+            }
+
+            Airplane* plane = gate->airplane;
+            lock_guard lock(plane->seatMutex);
+
+            if (row < plane->rows) {
+                string rowToDisplay = "| ";
+                for (int seat = 0; seat < plane->seatsPerRow; ++seat) {
+                    char symbol = plane->seats[row][seat] ? 'x' : '-';
+                    rowToDisplay += symbol;
+                    if (seat < plane->seatsPerRow - 1) {
+                        rowToDisplay += " ";
+                    }
+                }
+                rowToDisplay += " |";
+                cout << left << setw(30) << rowToDisplay;
+            } else {
+                cout << left << setw(30) << " ";
+            }
+        }
+        cout << "\n";
+    }
+}
+
 void Airport::StatusChecker()
 {
     while (true)
@@ -402,7 +529,21 @@ void Airport::StatusChecker()
 
             for (Airplane* airplane : airplanesInService)
             {
-                if (airplane->currentFuel == airplane->tankCapacity && !airplane->isRefueling)
+                auto allSeatsTaken = true;
+                auto seats = airplane->getSeats();
+                for (int i = 0; i < airplane->rows; ++i)
+                {
+                    for (int j = 0; j < airplane->seatsPerRow; ++j)
+                    {
+                        if (!seats[i][j])
+                        {
+                            allSeatsTaken = false;
+                            break;
+                        }
+                    }
+                }
+
+                if (airplane->currentFuel == airplane->tankCapacity && !airplane->isRefueling && allSeatsTaken)
                 {
                     toMove.push_back(airplane);
                 }
@@ -413,9 +554,68 @@ void Airport::StatusChecker()
                 airplanesInService.erase(remove(airplanesInService.begin(), airplanesInService.end(), airplane),
                                          airplanesInService.end());
                 airplanesWaiting.push_back(airplane);
+                airplane->readyToTakeOffTime = chrono::steady_clock::now();
             }
         }
 
         this_thread::sleep_for(chrono::milliseconds(500));
     }
 }
+
+void Airport::GeneratePassengerGroups()
+{
+    random_device rd;
+    mt19937 gen(rd());
+    uniform_int_distribution<> groupSizeDist(1, 5);
+    uniform_int_distribution<> groupCountDist(1, 4);
+
+    while (true)
+    {
+        this_thread::sleep_for(chrono::milliseconds(3000));
+        for (auto& gate : gates)
+        {
+            if (!gate) continue;
+
+            lock_guard lock(gate->passengerMtx);
+
+            int numGroups = groupCountDist(gen);
+
+            for (int i = 0; i < numGroups; ++i)
+            {
+                int groupSize = groupSizeDist(gen);
+                gate->passengerGroups.push_back(groupSize);
+            }
+        }
+    }
+}
+
+void Airport::SeatPassengersThread() {
+    while (true) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500)); // opóźnienie między próbami
+
+        for (auto& gate : gates) {
+            if (!gate) continue;
+
+            std::lock_guard<std::mutex> gateLock(gate->passengerMtx);
+
+            Airplane* airplane = gate->airplane;
+            if (!airplane) continue;
+            if (gate->passengerGroups.empty()) continue;
+
+            // przetwarzamy grupy po kolei
+            std::vector<int> remainingGroups;
+
+            for (int groupSize : gate->passengerGroups) {
+                bool seated = airplane->tryTakeSeat(groupSize);
+                if (!seated) {
+                    remainingGroups.push_back(groupSize);
+                } else {
+                }
+            }
+
+            // Podmieniamy kolejkę pasażerów na pozostałe grupy
+            gate->passengerGroups = std::move(remainingGroups);
+        }
+    }
+}
+

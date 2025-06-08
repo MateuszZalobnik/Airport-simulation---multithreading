@@ -10,8 +10,8 @@
 #include <random>
 #include <windows.h>
 #include <iomanip>
+#include <SFML/Audio.hpp>
 #include <algorithm>
-
 using namespace std;
 
 struct Runway
@@ -24,6 +24,8 @@ struct Runway
 
 struct Gate
 {
+    vector<int> passengerGroups;
+    mutex passengerMtx;
     mutex mtx;
     bool isAvailable = true;
     Airplane* airplane = nullptr;
@@ -46,6 +48,9 @@ public:
     mutex queueMutex;
 
     vector<thread> threads;
+    atomic<long long> totalPlaneWaitTime = 0;
+    atomic<long long> totalPlaneServiceTime = 0;
+    atomic<int> totalPlaneCount = 0;
 
     Airport(int numRunways, int numGates, int numTankers);
 private:
@@ -56,11 +61,16 @@ private:
     void manageTakingOff(Runway* runway);
     void runTanker(Tanker* tanker);
     void displayLoop();
+    void playSoundFile(const std::string& filename);
     void displayState();
+    void displayStatistics();
     void displayRunways();
     void displayGates();
     void displayTankers();
+    void displaySeats();
     void StatusChecker();
+    void GeneratePassengerGroups();
+    void SeatPassengersThread();
 };
 
 

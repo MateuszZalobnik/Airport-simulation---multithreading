@@ -9,3 +9,8 @@ add_executable(SO2_Lot main.cpp
         Airport/Airport.h
         AirportService/Tanker.h
         AirportService/Tanker.cpp)
+
+target_link_libraries(SO2_Lot
+        PRIVATE
+        sfml-audio
+)

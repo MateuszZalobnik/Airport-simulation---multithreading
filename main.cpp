@@ -5,6 +5,6 @@
 
 int main()
 {
-    Airport airport(3, 5, 2);
+    Airport airport(4, 6, 3);
     return 0;
 }
